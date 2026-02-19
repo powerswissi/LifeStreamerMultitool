@@ -1,83 +1,48 @@
-LifeStreamer Multitool (Swissi Edition)
+🚀 LifeStreamer Multitool (Swissi Edition)
 
-DE | EN
+LifeStreamer Multitool ist das ultimative Upgrade für IRL-Streamer auf Android, die Wert auf maximale Kontrolle, Stabilität und Flexibilität legen.
 
-LifeStreamer Multitool is the ultimate upgrade for IRL streamers on Android who want maximum control, stability, and flexibility.
+    [!IMPORTANT]
+    Dieses Projekt basiert auf dem soliden Kern von LifeStreamer (by dimadesu). Ein riesiges Dankeschön für das ursprüngliche Fundament! ❤️
 
-This project is built on the solid core of LifeStreamer by dimadesu. Huge thanks for the original foundation ❤️
+🇩🇪 Deutsch: Was ist das?
 
-Original Author: https://github.com/dimadesu/
+Das LifeStreamer Multitool ist mein praxisorientiertes Upgrade für echtes IRL-Streaming. Da ich selbst regelmäßig draußen streame, hatte ich genug von Black Screens und komplizierten Menüs. Dieses Tool ist von einem Streamer für Streamer gebaut.
+🔥 Features der Multitool Edition
 
-LifeStreamer (Original App): https://github.com/dimadesu/LifeStreamer
+    🔄 Nahtloser Kamera-Wechsel: Umschalten zwischen Quellen ohne Stream-Abbruch.
 
-MediaSrvr: https://github.com/dimadesu/MediaSrvr
+    🛡️ Stabilitäts-Boost: Automatischer Fallback-Timer und Schutz vor Black Screens.
 
-Bond Bunny: https://github.com/dimadesu/bond-bunny
+    🧠 Smart Source Persistence: Automatische Wiederherstellung der Quellen nach einem Neustart.
 
-🇩🇪 Deutsch Was ist das?
+🇺🇸 English: What is this?
 
-LifeStreamer Multitool ist mein praxisorientiertes Upgrade für echtes IRL-Streaming auf Android.
+LifeStreamer Multitool is my real-world upgrade for professional IRL streaming on Android. Built from real streaming experience because I was tired of camera crashes and random black screens.
+🔥 Multitool Edition Features
 
-Ich streame selbst regelmäßig draußen – und irgendwann hatte ich genug von:
+    🔄 Seamless Camera Switching: Swap sources without interrupting the live stream.
 
-Black Screens
+    🛡️ Hardware Stability Layer: Automatic recovery and proactive resource handling.
 
-Kamera-Ausfällen
+    🧠 Smart Source Persistence: Auto-restore your configuration after a restart.
 
-Unnötig komplizierten Menüs
+🛠 Setup & Installation
 
-Dieses Tool ist aus echter Streaming-Erfahrung entstanden. Gebaut von einem Streamer – für Streamer.
+    Lade die aktuelle APK unter Releases herunter.
 
-🔥 Multitool Features 🎥 Dual-Kamera Modus (Experimentell)
+    Installiere die Datei auf deinem Android-Gerät.
 
-Simultanes Streaming mit Front- und Rückkamera (abhängig von der Geräteperformance)
+    Konfiguriere deine RTMP-Ziele und starte deinen stabilen Stream!
 
-🔄 Kamera-Wechsel
+🤝 Credits & Original Project
 
-Nahtloser Kamera-Tausch
+Dieses Multitool wäre ohne die Vorarbeit von dimadesu nicht möglich:
 
-Umschalten zwischen Quellen ohne Stream-Abbruch (sofern unterstützt)
+    Original App: LifeStreamer
 
-🛡️ Stabilitäts-Boost
+    Core Components: MediaSrvr & Bond Bunny
 
-Automatischer Fallback-Timer
+⚖️ License
 
-Proaktives Hardware-Management
-
-Schutz vor Black Screens
-
-Smart Source Persistence (automatische Wiederherstellung nach Neustart)
-
-🇺🇸 English What is this?
-
-LifeStreamer Multitool is my real-world upgrade for professional IRL streaming on Android.
-
-I stream outdoors myself and built this because I was tired of:
-
-Camera crashes
-
-Random black screens
-
-Overcomplicated interfaces
-
-This tool was built from real streaming experience. Built by a streamer — for streamers.
-
-🔥 Multitool Edition Features 🎥 Dual Camera Mode (Experimental)
-
-Simultaneous front and back camera streaming (depending on device performance)
-
-🔄 Camera Switching
-
-Seamless camera swapping
-
-Switch sources without interrupting the stream (when supported)
-
-🛡️ Hardware Stability Layer
-
-Automatic recovery
-
-Proactive resource handling
-
-Black screen prevention
-
-Smart source persistence (auto-restore after restart)
+Dieses Projekt steht unter der GPL-3.0 License. Siehe LICENSE.txt für Details.
