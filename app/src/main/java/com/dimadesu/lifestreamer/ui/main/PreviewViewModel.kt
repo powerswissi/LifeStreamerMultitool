@@ -101,6 +101,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -129,6 +130,9 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
 
     // Mutex to prevent race conditions on video source operations (camera switch, etc.)
     private val videoSourceMutex = Mutex()
+
+    // Mutex to prevent race conditions during streamer source initialization
+    private val initializeMutex = Mutex()
 
     // Service binding for background streaming
     /**
@@ -187,20 +191,25 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
     val encoderStatsLiveData: LiveData<String?> get() = _encoderStatsLiveData
 
     // Visibility of RTMP source buttons based on URL configuration
+    // URL for default RTMP source to hide it from UI if not explicitly configured
+    private val rtmpDefaultUrls = listOf(
+        application.getString(R.string.rtmp_source_default_url),
+        application.getString(R.string.rtmp_source_2_default_url),
+        application.getString(R.string.rtmp_source_3_default_url),
+        application.getString(R.string.rtmp_source_4_default_url)
+    )
+
     val isRtmp1Configured = storageRepository.getRtmpVideoSourceUrlFlow(1)
-        .map { it.isNotBlank() }
+        .map { it.trim().isNotEmpty() && it != rtmpDefaultUrls[0] }
         .asLiveData()
-    
     val isRtmp2Configured = storageRepository.getRtmpVideoSourceUrlFlow(2)
-        .map { it.isNotBlank() }
+        .map { it.trim().isNotEmpty() && it != rtmpDefaultUrls[1] }
         .asLiveData()
-
     val isRtmp3Configured = storageRepository.getRtmpVideoSourceUrlFlow(3)
-        .map { it.isNotBlank() }
+        .map { it.trim().isNotEmpty() && it != rtmpDefaultUrls[2] }
         .asLiveData()
-
     val isRtmp4Configured = storageRepository.getRtmpVideoSourceUrlFlow(4)
-        .map { it.isNotBlank() }
+        .map { it.trim().isNotEmpty() && it != rtmpDefaultUrls[3] }
         .asLiveData()
 
     // Track whether the UI is in foreground (to avoid camera operations when paused)
@@ -733,6 +742,8 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
 
     // Track secondary audio player for "Audio Lock" feature
     private var secondaryAudioPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+    private var secondaryPlayerJob: Job? = null
+    private var currentSecondaryAudioIndex: Int = -1
     
     init {
         // Bind to streaming service for background streaming capability
@@ -1182,38 +1193,30 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
     }
 
     /**
-     * Determines and sets the appropriate audio source based on the current video source.
-     * Audio follows video:
-     * - Camera video -> Microphone (or BT mic if toggled ON via ConditionalAudioSourceFactory)
-     * - RTMP/Bitmap video -> MediaProjection (if available), otherwise Microphone
-     * 
-     * Note: BT mic toggle only affects Camera sources, not RTMP/Bitmap which use MediaProjection.
+     * Determines and sets the appropriate audio source on the streamer based on target index.
+     * @param targetIndex 1-4 for RTMP, -1 for Camera Mic, or any negative for fallback Mic.
      */
-    private suspend fun setAudioSourceBasedOnVideoSource() {
+    private suspend fun applyAudioSourceSelection(targetIndex: Int) {
         val currentStreamer = serviceStreamer ?: return
-        val currentVideoSource = currentStreamer.videoInput?.sourceFlow?.value
-        val isRtmpOrBitmap = currentVideoSource != null && currentVideoSource !is ICameraSource
         
-        if (isRtmpOrBitmap) {
-            // RTMP or Bitmap source - try MediaProjection, fallback to microphone
-            // Note: BT mic toggle is ignored for RTMP/Bitmap - they always use MediaProjection or mic
+        if (targetIndex > 0) {
+            // RTMP source audio - try MediaProjection to capture ExoPlayer output
             val projection = streamingMediaProjection ?: mediaProjectionHelper.getMediaProjection()
             if (projection != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 try {
                     currentStreamer.setAudioSource(MediaProjectionAudioSourceFactory(projection))
-                    Log.i(TAG, "Set MediaProjection audio for RTMP/Bitmap video")
+                    Log.i(TAG, "Applied MediaProjection audio for Room $targetIndex")
                 } catch (e: Exception) {
                     Log.w(TAG, "MediaProjection audio failed, using conditional source: ${e.message}")
                     currentStreamer.setAudioSource(com.dimadesu.lifestreamer.audio.ConditionalAudioSourceFactory())
                 }
             } else {
-                Log.i(TAG, "No MediaProjection available for RTMP/Bitmap, using conditional source")
+                Log.i(TAG, "No MediaProjection available for Room $targetIndex, using conditional source")
                 currentStreamer.setAudioSource(com.dimadesu.lifestreamer.audio.ConditionalAudioSourceFactory())
             }
         } else {
-            // Camera source - use ConditionalAudioSourceFactory which respects BT mic toggle
-            // The factory creates mic source initially, and BluetoothAudioManager switches to BT if enabled
-            Log.i(TAG, "Camera video detected, using ConditionalAudioSourceFactory (BT-aware)")
+            // Camera/Mic source
+            Log.i(TAG, "Applied ConditionalAudioSourceFactory (Mic/BT) for target $targetIndex")
             currentStreamer.setAudioSource(com.dimadesu.lifestreamer.audio.ConditionalAudioSourceFactory())
         }
     }
@@ -1254,9 +1257,16 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                 if (binder is CameraStreamerService.CameraStreamerServiceBinder) {
                     streamerService = binder.getService()
-                    // Keep direct binder reference for quick API calls
+                    // CRASH FIX: PreviewViewModel.kt:1259 -> Safe cast and null-check to prevent NPE/ClassCastException on binder access
+                    val binderStreamer = binder.streamer
+                    if (binderStreamer is SingleStreamer) {
+                        serviceStreamer = binderStreamer
+                        streamerFlow.value = binderStreamer
+                    } else {
+                        Log.e(TAG, "Binder streamer is null or not a SingleStreamer")
+                        return
+                    }
                     serviceBinder = binder
-                    serviceStreamer = binder.streamer as SingleStreamer
                     
                     // Observe centralized reconnection status message from service
                     try {
@@ -1451,7 +1461,9 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
      * Only initializes if streamer is not already streaming to avoid configuration conflicts.
      */
     private suspend fun initializeStreamerSources() {
-        val currentStreamer = serviceStreamer ?: return
+        if (!initializeMutex.tryLock()) return // Prevent concurrent/duplicate initialization
+        try {
+            val currentStreamer = serviceStreamer ?: return
 
         // Don't reinitialize sources if already streaming - this prevents configuration conflicts
         if (currentStreamer.isStreamingFlow.value == true) {
@@ -1467,10 +1479,9 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
 
         Log.i(TAG, "Initializing streamer sources - Audio enabled: ${currentStreamer.withAudio}, Video enabled: ${currentStreamer.withVideo}")
 
-        // Set audio source and video source only if not streaming
+        // Set initial audio routing (handles both streamer source and local monitoring)
         if (currentStreamer.withAudio) {
-            Log.i(TAG, "Audio source is enabled. Setting audio based on video source")
-            setAudioSourceBasedOnVideoSource()
+            updateAudioRouting()
         } else {
             Log.i(TAG, "Audio source is disabled")
         }
@@ -1498,6 +1509,9 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
         val audioSourceLabel = getAudioSourceLabel(initialAudioSource)
         _audioSourceIndicatorLiveData.postValue(audioSourceLabel)
         Log.i(TAG, "Initial audio source: $audioSourceLabel (${initialAudioSource?.javaClass?.simpleName})")
+        } finally {
+            initializeMutex.unlock()
+        }
     }
 
     /**
@@ -1888,7 +1902,7 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
             if (hasVideoSource && !hasAudioSource && videoSource is IBitmapSource) {
                 Log.w(TAG, "Bitmap source detected without audio - setting audio source")
                 try {
-                    setAudioSourceBasedOnVideoSource()
+                    updateAudioRouting()
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to set audio for bitmap source: ${e.message}")
                 }
@@ -1987,7 +2001,7 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
                 viewModelScope.launch {
                     try {
                         // Set appropriate audio source based on current video source
-                        setAudioSourceBasedOnVideoSource()
+                        updateAudioRouting()
 
                         // Start the actual stream
                         service?.setStreamStatus(StreamStatus.CONNECTING)
@@ -2821,84 +2835,107 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
      */
     /**
      * Updates the audio routing based on Video Source and Audio Selection.
+     * Enforces exclusive audio: only one source (Mic or one RTMP room) is active.
      */
     private fun updateAudioRouting() {
-        // Determine actual current video source
-        val videoSource = serviceStreamer?.videoInput?.sourceFlow?.value
+        val currentStreamer = serviceStreamer
+        val videoSource = currentStreamer?.videoInput?.sourceFlow?.value
         val isRtmpVideo = videoSource is RTMPVideoSource
         val currentRtmpIndex = if (isRtmpVideo) (_activeRtmpIndex.value ?: 1) else -999
         
         val audioSelection = _selectedRtmpAudioSource.value ?: 0 // 0=Auto, -1=Cam, 1-4=RTMP
         
-        // Determine target audio source index
-        // If Auto(0), match the current video source (if RTMP, else use -999 to represent 'matching non-RTMP')
+        // Final decision on which audio room to use. Auto(0) follows current video source.
         val targetAudioIndex = if (audioSelection == 0) currentRtmpIndex else audioSelection
         
         val isMonitoring = _isMonitorAudioOn.value ?: false
         val targetVolume = if (isMonitoring) 1.0f else 0.0f
         
-        Log.i(TAG, "Audio Routing: VideoIndex=$currentRtmpIndex, AudioSel=$audioSelection, Target=$targetAudioIndex, Vol=$targetVolume")
+        Log.i(TAG, "Audio Routing Update: VideoIndex=$currentRtmpIndex, Selection=$audioSelection -> TargetAudioIndex=$targetAudioIndex, Vol=$targetVolume")
 
-        // Case 1: Audio source Matches Video Source
-        if (targetAudioIndex == currentRtmpIndex) {
-            // Valid switch or both are non-RTMP
+        // 1. Primary RTMP player is ALWAYS muted (video-only)
+        try {
+            currentRtmpPlayer?.volume = 0f
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to mute primary player: ${e.message}")
+        }
+        
+        // 2. Manage Monitoring and Streamer Audio Source
+        if (targetAudioIndex > 0) {
+            // Specific RTMP room requested (1-4)
+            // Stop local mic passthrough monitoring immediately
+            service?.stopAudioPassthrough()
+            
+            // Manage secondary player for local monitoring
+            if (secondaryAudioPlayer == null || currentSecondaryAudioIndex != targetAudioIndex) {
+                 startSecondaryPlayer(targetAudioIndex)
+            } else {
+                 secondaryAudioPlayer?.volume = targetVolume
+            }
+            
+            // Update streamer to use MediaProjection (captures the secondary player's audio)
+            viewModelScope.launch {
+                applyAudioSourceSelection(targetAudioIndex)
+            }
+        } else {
+            // Camera / Microphone requested
             releaseSecondaryPlayer()
             
-            // Unmute primary player (if it exists and is valid)
-            currentRtmpPlayer?.volume = targetVolume
-        } 
-        // Case 2: Audio Source is DIFFERENT from Video Source
-        else {
-            // Mute primary video player (it's not the desired audio source)
-            currentRtmpPlayer?.volume = 0f
-            
-            // Configure Secondary Player
-            if (targetAudioIndex > 0) {
-                // We want a specific RTMP stream for audio
-                if (secondaryAudioPlayer == null) {
-                    startSecondaryPlayer(targetAudioIndex)
-                } else {
-                    // Update volume if already playing
-                    secondaryAudioPlayer?.volume = targetVolume
-                }
+            // Handle local mic passthrough monitoring
+            if (isMonitoring) {
+                 service?.startAudioPassthrough()
             } else {
-                // Audio is Camera (-1/Mic) or effectively Auto-on-Camera
-                releaseSecondaryPlayer()
+                 service?.stopAudioPassthrough()
+            }
+            
+            // Update streamer to use Microphone directly
+            viewModelScope.launch {
+                applyAudioSourceSelection(targetAudioIndex)
             }
         }
     }
 
     private fun startSecondaryPlayer(rtmpIndex: Int) {
-         // Get URL from DataStore (synchronously/blocking for simplicity in this context or launch coroutine)
-         viewModelScope.launch {
+         releaseSecondaryPlayer() // Stop any previous attempt/player
+         currentSecondaryAudioIndex = rtmpIndex
+         
+         secondaryPlayerJob = viewModelScope.launch {
              val url = storageRepository.getRtmpVideoSourceUrlFlow(rtmpIndex).firstOrNull() as? String
              
              if (!url.isNullOrBlank()) {
-                 // Check if we need to recreate
-                 releaseSecondaryPlayer()
-                 
                  val isMonitoring = _isMonitorAudioOn.value ?: false
                  val targetVolume = if (isMonitoring) 1.0f else 0.0f
                  
                  Log.i(TAG, "Starting Secondary Audio Player for RTMP $rtmpIndex: $url (Vol: $targetVolume)")
-                 val player = androidx.media3.exoplayer.ExoPlayer.Builder(application).build().apply {
-                     setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url!!)))
-                     prepare()
-                     playWhenReady = true
-                     volume = targetVolume
+                 try {
+                     val player = androidx.media3.exoplayer.ExoPlayer.Builder(application).build().apply {
+                         setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)))
+                         prepare()
+                         playWhenReady = true
+                         volume = targetVolume
+                     }
+                     secondaryAudioPlayer = player
+                 } catch (e: Exception) {
+                     Log.e(TAG, "Failed to build secondary player for $rtmpIndex: ${e.message}")
                  }
-                 secondaryAudioPlayer = player
              }
          }
     }
 
     private fun releaseSecondaryPlayer() {
+        secondaryPlayerJob?.cancel()
+        secondaryPlayerJob = null
         secondaryAudioPlayer?.let {
             Log.i(TAG, "Releasing Secondary Audio Player")
-            it.stop()
-            it.release()
+            try {
+                it.stop()
+                it.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing secondary player: ${e.message}")
+            }
         }
         secondaryAudioPlayer = null
+        currentSecondaryAudioIndex = -1
     }
 
     /**
@@ -2923,8 +2960,9 @@ class PreviewViewModel(private val application: Application) : ObservableViewMod
                 }
             }
         }
+        releaseSecondaryPlayer()
         service?.stopAudioPassthrough()
-        Log.i(TAG, "Audio monitor OFF")
+        Log.i(TAG, "Audio monitoring STOPPED (Muted & Released)")
     }
     
     /**

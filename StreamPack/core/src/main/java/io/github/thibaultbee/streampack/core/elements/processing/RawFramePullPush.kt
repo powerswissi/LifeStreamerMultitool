@@ -18,6 +18,7 @@ package io.github.thibaultbee.streampack.core.elements.processing
 import io.github.thibaultbee.streampack.core.elements.data.RawFrame
 import io.github.thibaultbee.streampack.core.elements.utils.pool.IRawFrameFactory
 import io.github.thibaultbee.streampack.core.elements.utils.pool.RawFrameFactory
+import io.github.thibaultbee.streampack.core.elements.processing.audio.IAudioFrameProcessor
 import io.github.thibaultbee.streampack.core.logger.Logger
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -59,6 +60,11 @@ class RawFramePullPush(
     private val isReleaseRequested = AtomicBoolean(false)
 
     private var job: Job? = null
+    private var lastPts = -1L
+    private var lastBufferSize = 0
+
+    var continuous = false
+    var frameDurationUs = 0L
 
     suspend fun setInput(getFrame: suspend (frameFactory: IRawFrameFactory) -> RawFrame) {
         mutex.withLock {
@@ -88,15 +94,42 @@ class RawFramePullPush(
                         null
                     }
                 }
-                if (rawFrame == null) {
+
+                val frameToProcess = if (rawFrame == null) {
+                    val isMuted = (frameProcessor as? IAudioFrameProcessor)?.isMuted == true
+                    if (continuous && isMuted) {
+                        // CRASH PREVENTION: Default values for silent frame generation if source stalls early
+                        val duration = if (frameDurationUs > 0) frameDurationUs else 20000L // Default 20ms
+                        val bufferSize = if (lastBufferSize > 0) lastBufferSize else 1024
+                        val nextPts = if (lastPts == -1L) 0L else (lastPts + duration)
+                        
+                        // Generate silent frame
+                        val generatedFrame = frameFactory.create(bufferSize, nextPts)
+                        lastPts = nextPts // Update lastPts so next generated frame is also correct
+                        generatedFrame
+                    } else {
+                        null
+                    }
+                } else {
+                    if (lastPts != -1L && rawFrame.timestampInUs > lastPts) {
+                        // Update frame duration estimate
+                        frameDurationUs = rawFrame.timestampInUs - lastPts
+                    }
+                    lastPts = rawFrame.timestampInUs
+                    lastBufferSize = rawFrame.rawBuffer.remaining()
+                    rawFrame
+                }
+
+                if (frameToProcess == null) {
                     continue
                 }
 
                 // Process buffer with effects
                 val processedFrame = try {
-                    frameProcessor.processFrame(rawFrame)
+                    frameProcessor.processFrame(frameToProcess)
                 } catch (t: Throwable) {
                     Logger.e(TAG, "Failed to pre-process frame: ${t.message}")
+                    frameToProcess.close()
                     continue
                 }
 

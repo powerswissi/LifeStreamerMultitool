@@ -44,7 +44,6 @@ import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
-
 /**
  * The public interface for the audio input.
  * It provides access to the audio source, the audio processor, and the streaming state.
@@ -89,6 +88,12 @@ interface IAudioInput {
      * The audio processor for adding effects to the audio frames.
      */
     val processor: IAudioFrameProcessor
+
+    /**
+     * Whether the audio input should provide a continuous stream of frames even if the source is
+     * stalled or muted.
+     */
+    var isContinuous: Boolean
 }
 
 /**
@@ -136,6 +141,7 @@ internal class AudioInput(
      */
     private val frameProcessorInternal = AudioFrameProcessor()
     override val processor: IAudioFrameProcessor = frameProcessorInternal
+
     private val port = if (config is PushConfig) {
         PushAudioPort(frameProcessorInternal, config, dispatcherProvider)
     } else {
@@ -162,6 +168,28 @@ internal class AudioInput(
      */
     private val _isStreamingFlow = MutableStateFlow(false)
     override val isStreamingFlow = _isStreamingFlow.asStateFlow()
+
+    override var isContinuous: Boolean = true // Now default to true to prevent black screen
+        set(value) {
+            field = value
+            updatePortContinuous()
+        }
+
+    init {
+        updatePortContinuous()
+    }
+
+    private fun updatePortContinuous() {
+        val config = sourceConfig
+        if (config != null && isContinuous) {
+            // Assume 10ms frame as a safe default if we don't know yet,
+            // but we'll try to refine this or let RawFramePullPush use its lastBufferSize/Pts
+            // For now, let's just enable it. The duration will be updated on the first frame.
+            port.setContinuous(true, 10_000L)
+        } else {
+            port.setContinuous(false, 0L)
+        }
+    }
 
     /**
      * Sets a new audio source.
@@ -224,7 +252,6 @@ internal class AudioInput(
         }
     }
 
-
     internal suspend fun setSourceConfig(newAudioSourceConfig: AudioSourceConfig) {
         if (isReleaseRequested.get()) {
             throw IllegalStateException("Pipeline is released")
@@ -252,6 +279,7 @@ internal class AudioInput(
                         "setAudioSourceConfig: Audio source is not set yet"
                     )
                     _sourceConfigFlow.emit(newAudioSourceConfig)
+                    updatePortContinuous()
                 } catch (t: Throwable) {
                     _sourceConfigFlow.emit(null)
                     throw t
@@ -383,6 +411,7 @@ internal class AudioInput(
 private sealed interface IAudioPort<T> : Streamable, Releasable {
     suspend fun setInput(getFrame: T)
     suspend fun removeInput()
+    fun setContinuous(continuous: Boolean, frameDurationUs: Long)
 }
 
 private class PushAudioPort(
@@ -407,6 +436,11 @@ private class PushAudioPort(
         audioPullPush.removeInput()
     }
 
+    override fun setContinuous(continuous: Boolean, frameDurationUs: Long) {
+        audioPullPush.continuous = continuous
+        audioPullPush.frameDurationUs = frameDurationUs
+    }
+
     override fun startStream() {
         audioPullPush.startStream()
     }
@@ -425,14 +459,28 @@ private class CallbackAudioPort(private val audioFrameProcessor: AudioFrameProce
     private var getFrame: ((frame: RawFrame) -> RawFrame)? = null
     private val mutex = Mutex()
 
+    private var continuous = false
+    private var frameDurationUs = 0L
+    private var lastPts = -1L
+
     var audioFrameRequestedListener: OnFrameRequestedListener =
         object : OnFrameRequestedListener {
             override suspend fun onFrameRequested(buffer: ByteBuffer): RawFrame {
                 val frame = mutex.withLock {
-                    val getFrame = requireNotNull(getFrame) {
-                        "Audio frame requested listener is not set yet"
+                    val getFrame = this@CallbackAudioPort.getFrame
+                    if (getFrame == null) {
+                        if (continuous && audioFrameProcessor.isMuted) {
+                            // CRASH PREVENTION: Handle source stalls with default timing
+                            val duration = if (frameDurationUs > 0) frameDurationUs else 20000L
+                            val nextPts = if (lastPts == -1L) 0L else (lastPts + duration)
+                            lastPts = nextPts
+                            return@withLock RawFrame(buffer, nextPts)
+                        }
+                        throw IllegalStateException("Audio frame requested listener is not set yet")
                     }
-                    getFrame(RawFrame(buffer, 0))
+                    val rawFrame = getFrame(RawFrame(buffer, 0))
+                    lastPts = rawFrame.timestampInUs
+                    rawFrame
                 }
                 return audioFrameProcessor.processFrame(frame)
             }
@@ -448,6 +496,11 @@ private class CallbackAudioPort(private val audioFrameProcessor: AudioFrameProce
         mutex.withLock {
             this.getFrame = null
         }
+    }
+
+    override fun setContinuous(continuous: Boolean, frameDurationUs: Long) {
+        this.continuous = continuous
+        this.frameDurationUs = frameDurationUs
     }
 
     override fun startStream() = Unit

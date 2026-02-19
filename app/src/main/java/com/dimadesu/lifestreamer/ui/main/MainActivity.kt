@@ -39,13 +39,14 @@ class MainActivity : AppCompatActivity() {
         binding = MainActivityBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Note: Permissions (Camera, Microphone, Notifications) are requested by PreviewFragment.
-        // Bluetooth permissions are requested on-demand when user taps the BT mic toggle.
-
         if (savedInstanceState == null) {
-            supportFragmentManager.beginTransaction()
-                .replace(R.id.container, PreviewFragment())
-                .commitNow()
+            // Guard: ensure fragment is only added if container exists and binding is initialized
+            val container = findViewById<android.view.View>(R.id.container)
+            if (container != null) {
+                supportFragmentManager.beginTransaction()
+                    .replace(R.id.container, PreviewFragment())
+                    .commitNow()
+            }
         }
 
         bindProperties()

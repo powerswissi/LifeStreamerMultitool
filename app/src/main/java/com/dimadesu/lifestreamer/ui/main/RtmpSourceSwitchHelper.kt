@@ -4,6 +4,7 @@ import com.swissi.lifestreamer.multitool.R
 
 import android.app.Application
 import android.util.Log
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -58,7 +59,12 @@ internal object RtmpSourceSwitchHelper {
 
             val exoPlayer = ExoPlayer.Builder(application)
                 .setLoadControl(loadControl)
-                .build()
+                .build().apply {
+                    trackSelectionParameters = trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                        .build()
+                    volume = 0f
+                }
 
             val mediaItem = MediaItem.fromUri(url)
             
