@@ -27,6 +27,7 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.core.app.NotificationCompat
 import com.dimadesu.lifestreamer.ui.main.MainActivity
+import com.swissi.lifestreamer.multitool.R
 
 /**
  * Helper class to create and manage notifications.
@@ -230,7 +231,11 @@ class NotificationUtils(
             if (showStart && startPending != null) addAction(iconResourceId, "Start", startPending)
             // Always include mute and exit actions where provided
             if (mutePending != null) addAction(iconResourceId, muteLabel, mutePending)
-                if (exitPending != null) addAction(iconResourceId, service.getString(com.swissi.lifestreamer.multitool.R.string.service_notification_action_exit), exitPending)
+            if (exitPending != null) addAction(
+                iconResourceId,
+                service.getString(R.string.service_notification_action_exit),
+                exitPending
+            )
             setOnlyAlertOnce(true)
             setSound(null)
             setVibrate(null)
