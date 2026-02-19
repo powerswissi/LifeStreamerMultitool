@@ -1,0 +1,35 @@
+package io.github.thibaultbee.streampack.core.elements.endpoints
+
+import android.content.Context
+import android.net.Uri
+import androidx.test.platform.app.InstrumentationRegistry
+import io.github.thibaultbee.streampack.core.configuration.mediadescriptor.UriMediaDescriptor
+import junit.framework.TestCase.fail
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.runTest
+import org.junit.Test
+
+class MediaMuxerEndpointTest {
+    private val context: Context = InstrumentationRegistry.getInstrumentation().context
+    private val mediaMuxerEndpoint = MediaMuxerEndpoint(context, Dispatchers.IO)
+
+    @Test
+    fun releaseMustNotThrow() = runTest {
+        mediaMuxerEndpoint.release()
+    }
+
+    @Test
+    fun closeMustNotThrow() = runTest {
+        mediaMuxerEndpoint.close()
+    }
+
+    @Test
+    fun openNotAFileTest() = runTest {
+        try {
+            mediaMuxerEndpoint.open(UriMediaDescriptor(Uri.parse("aaa://a/b/c/d")))
+            fail("Should throw")
+        } catch (_: Throwable) {
+        }
+    }
+
+}

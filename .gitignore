@@ -1,0 +1,52 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Local config
+local.properties
+
+# Logs
+*.log
+
+# Keystore / signing
+*.jks
+*.keystore
+keystore.properties
+
+# OS / misc
+.DS_Store
+Thumbs.db
+
+# Kotlin
+.kotlin/
+
+# VSCode
+.vscode/
+
+# Backups und spezifische Logs
+project_backups/
+backup_info.txt
+build_log.txt
+line51.txt
+
+.antigravityignore
+
+# Lokale Skripte und Hilfsdateien
+find_source.ps1
+*.ps1
+
+# Falls du die Gradle-Wrapper wirklich nicht auf GitHub willst (optional)
+gradlew
+gradlew.bat
+gradle/wrapper/
+
+# Gradle-spezifische Reste
+gradle/
+gradle.properties
+keystore.properties.example
+.gitmodules
