@@ -66,9 +66,17 @@ LifeStreamer Multitool is my real-world upgrade for professional IRL streaming o
 
 ## 🛠 Setup & Installation
 
+### 🇩🇪 Deutsch
 1. Lade die aktuelle APK unter [**Releases**](https://github.com/powerswissi/LifeStreamerMultitool/releases) herunter.
 2. Installiere die Datei auf deinem Android-Gerät.
-3. Konfiguriere deine RTMP-Ziele und starte deinen stabilen Stream!
+3. **WICHTIG:** Du benötigst zwingend **Bond Bunny** und **MediaServer**, sonst funktioniert die App nicht!
+
+
+### 🇺🇸 English
+1. Download the latest APK from [**Releases**](https://github.com/powerswissi/LifeStreamerMultitool/releases).
+2. Install the file on your Android device.
+3. **IMPORTANT:** You absolutely need **Bond Bunny** and **MediaServer**, otherwise the app will not function!
+
 
 ---
 
