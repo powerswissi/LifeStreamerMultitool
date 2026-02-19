@@ -1,83 +1,52 @@
-LifeStreamer Multitool (Swissi Edition)
+# 🚀 LifeStreamer Multitool (Swissi Edition)
 
-DE | EN
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Platform: Android](https://img.shields.io/badge/Platform-Android-green.svg)](#)
+[![Release](https://img.shields.io/github/v/release/powerswissi/LifeStreamerMultitool)](https://github.com/powerswissi/LifeStreamerMultitool/releases)
 
-LifeStreamer Multitool is the ultimate upgrade for IRL streamers on Android who want maximum control, stability, and flexibility.
+**LifeStreamer Multitool** ist das ultimative Upgrade für IRL-Streamer auf Android, die Wert auf maximale Kontrolle, Stabilität und Flexibilität legen.
 
-This project is built on the solid core of LifeStreamer by dimadesu. Huge thanks for the original foundation ❤️
+> [!IMPORTANT]
+> Dieses Projekt basiert auf dem soliden Kern von [LifeStreamer by dimadesu](https://github.com/dimadesu/LifeStreamer). Ein riesiges Dankeschön für das ursprüngliche Fundament! ❤️
 
-Original Author: https://github.com/dimadesu/
+---
 
-LifeStreamer (Original App): https://github.com/dimadesu/LifeStreamer
+## 🇩🇪 Deutsch: Was ist das?
 
-MediaSrvr: https://github.com/dimadesu/MediaSrvr
+Das LifeStreamer Multitool ist mein praxisorientiertes Upgrade für echtes IRL-Streaming. Da ich selbst regelmäßig draußen streame, hatte ich genug von Black Screens und komplizierten Menüs. Dieses Tool ist **von einem Streamer für Streamer** gebaut.
 
-Bond Bunny: https://github.com/dimadesu/bond-bunny
+### 🔥 Features der Multitool Edition
+* 🔄 **Nahtloser Kamera-Wechsel:** Umschalten zwischen Quellen ohne Stream-Abbruch.
+* 🛡️ **Stabilitäts-Boost:** Automatischer Fallback-Timer und Schutz vor Black Screens.
+* 🧠 **Smart Source Persistence:** Automatische Wiederherstellung der Quellen nach einem Neustart.
 
-🇩🇪 Deutsch Was ist das?
+---
 
-LifeStreamer Multitool ist mein praxisorientiertes Upgrade für echtes IRL-Streaming auf Android.
+## 🇺🇸 English: What is this?
 
-Ich streame selbst regelmäßig draußen – und irgendwann hatte ich genug von:
+LifeStreamer Multitool is my real-world upgrade for professional IRL streaming on Android. Built from real streaming experience because I was tired of camera crashes and random black screens.
 
-Black Screens
+### 🔥 Multitool Edition Features
+* 🔄 **Seamless Camera Switching:** Swap sources without interrupting the live stream.
+* 🛡️ **Hardware Stability Layer:** Automatic recovery and proactive resource handling.
+* 🧠 **Smart Source Persistence:** Auto-restore your configuration after a restart.
 
-Kamera-Ausfällen
+---
 
-Unnötig komplizierten Menüs
+## 🛠 Setup & Installation
 
-Dieses Tool ist aus echter Streaming-Erfahrung entstanden. Gebaut von einem Streamer – für Streamer.
+1. Lade die aktuelle APK unter [**Releases**](https://github.com/powerswissi/LifeStreamerMultitool/releases) herunter.
+2. Installiere die Datei auf deinem Android-Gerät.
+3. Konfiguriere deine RTMP-Ziele und starte deinen stabilen Stream!
 
-🔥 Multitool Features 🎥 Dual-Kamera Modus (Experimentell)
+---
 
-Simultanes Streaming mit Front- und Rückkamera (abhängig von der Geräteperformance)
+## 🤝 Credits & Original Project
+Dieses Multitool wäre ohne die Vorarbeit von **dimadesu** nicht möglich:
+* **Original App:** [LifeStreamer](https://github.com/dimadesu/LifeStreamer)
+* **Core Components:** [MediaSrvr](https://github.com/dimadesu/MediaSrvr) & [Bond Bunny](https://github.com/dimadesu/bond-bunny)
 
-🔄 Kamera-Wechsel
+---
 
-Nahtloser Kamera-Tausch
-
-Umschalten zwischen Quellen ohne Stream-Abbruch (sofern unterstützt)
-
-🛡️ Stabilitäts-Boost
-
-Automatischer Fallback-Timer
-
-Proaktives Hardware-Management
-
-Schutz vor Black Screens
-
-Smart Source Persistence (automatische Wiederherstellung nach Neustart)
-
-🇺🇸 English What is this?
-
-LifeStreamer Multitool is my real-world upgrade for professional IRL streaming on Android.
-
-I stream outdoors myself and built this because I was tired of:
-
-Camera crashes
-
-Random black screens
-
-Overcomplicated interfaces
-
-This tool was built from real streaming experience. Built by a streamer — for streamers.
-
-🔥 Multitool Edition Features 🎥 Dual Camera Mode (Experimental)
-
-Simultaneous front and back camera streaming (depending on device performance)
-
-🔄 Camera Switching
-
-Seamless camera swapping
-
-Switch sources without interrupting the stream (when supported)
-
-🛡️ Hardware Stability Layer
-
-Automatic recovery
-
-Proactive resource handling
-
-Black screen prevention
-
-Smart source persistence (auto-restore after restart)
+## ⚖️ License
+Dieses Projekt steht unter der **GPL-3.0 License**. Siehe [LICENSE.txt](LICENSE.txt) für Details.
