@@ -2,7 +2,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Platform: Android](https://img.shields.io/badge/Platform-Android-green.svg)](#)
-[![Release](https://img.github.com/v/release/powerswissi/LifeStreamerMultitool)](https://github.com/powerswissi/LifeStreamerMultitool/releases)
+[![Release](https://img.shields.io/github/v/release/powerswissi/LifeStreamerMultitool)](https://github.com/powerswissi/LifeStreamerMultitool/releases)
 
 **LifeStreamer Multitool** ist das ultimative Upgrade für IRL-Streamer auf Android, die Wert auf maximale Kontrolle, Stabilität und Flexibilität legen.
 
@@ -36,22 +36,31 @@ Das LifeStreamer Multitool ist mein praxisorientiertes Upgrade für echtes IRL-S
 
 Du kannst die Audioquelle direkt in der App umschalten. Folgende Hardware wird unterstützt:
 
-* **Internes Mikrofon:** Das Standard-Mikrofon deines Smartphones.
-* **Bluetooth Headsets:** Getestet mit gängigen Modellen (z.B. AirPods, Galaxy Buds).
-* **USB-C Audio-Interfaces:** Getestet für professionelle Mikrofone via USB-Adapter.
+### 🎙️ Unterstützte Audio-Hardware
+* **Internes Mikrofon:** Nutzt das Standard-Mikrofon deines Smartphones für den Stream.
+* **Bluetooth Headsets:** Nahtlose Übertragung via Funk (z. B. AirPods, Galaxy Buds).
+* **USB-C Audio-Interfaces:** Bindet professionelle Mikrofone direkt in den digitalen Stream ein.
 * **Kabelgebundene Headsets (3,5mm):** Unterstützung implementiert (ungetestet – Feedback willkommen!).
+* **Audio über RTMP:** Du kannst explizit auswählen, ob und wie das Audio über das RTMP-Protokoll geroutet wird.
 
 ---
 
 ## 🇺🇸 English: What is this?
 
-LifeStreamer Multitool is my real-world upgrade for professional IRL streaming on Android. Built from real streaming experience because I was tired of camera crashes and random black screens.
+LifeStreamer Multitool is my real-world upgrade for professional IRL streaming on Android. Built from real streaming experience because I was tired of camera crashes and random black screens. This tool is built **by a streamer for streamers**.
 
 ### 🔥 Multitool Edition Features
 * 🔄 **Seamless Camera Switching:** Swap sources without interrupting the live stream.
-* 🎙️ **Advanced Audio Routing:** Choose your mic (Internal, Bluetooth, USB) with a single tap.
-* 🛡️ **Hardware Stability Layer:** Automatic recovery and proactive resource handling.
-* 🧠 **Smart Source Persistence:** Auto-restore your configuration after a restart.
+* 🎙️ **Advanced Audio Routing:** Choose your microphone source with a single click on the audio button.
+* 🛡️ **Stability Boost:** Automatic fallback timer and protection against black screens.
+* 🧠 **Smart Source Persistence:** Automatically restore your sources after a restart.
+
+### 🎧 Audio-Routing Details (English)
+* **Internal Microphone:** Uses your smartphone's built-in microphone for the stream.
+* **Bluetooth Headsets:** Seamless transmission via wireless (e.g., AirPods, Galaxy Buds).
+* **USB-C Audio Interfaces:** Integrate professional microphones directly into the digital stream.
+* **Wired Headsets (3.5mm):** Support implemented (untested – feedback welcome!).
+* **Audio via RTMP:** You can explicitly choose if and how the audio is routed via the RTMP protocol.
 
 ---
 
