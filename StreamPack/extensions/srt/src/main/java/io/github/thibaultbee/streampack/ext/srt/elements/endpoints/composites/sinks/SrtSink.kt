@@ -1,0 +1,215 @@
+/*
+ * Copyright (C) 2024 Thibault B.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package io.github.thibaultbee.streampack.ext.srt.elements.endpoints.composites.sinks
+
+import io.github.thibaultbee.srtdroid.core.enums.Boundary
+import io.github.thibaultbee.srtdroid.core.enums.SockOpt
+import io.github.thibaultbee.srtdroid.core.enums.Transtype
+import io.github.thibaultbee.srtdroid.core.models.MsgCtrl
+import io.github.thibaultbee.srtdroid.core.models.SrtUrl.Mode
+import io.github.thibaultbee.srtdroid.core.models.Stats
+import io.github.thibaultbee.srtdroid.ktx.CoroutineSrtSocket
+import io.github.thibaultbee.srtdroid.ktx.connect
+import io.github.thibaultbee.streampack.core.configuration.mediadescriptor.MediaDescriptor
+import io.github.thibaultbee.streampack.core.elements.endpoints.ClosedException
+import io.github.thibaultbee.streampack.core.elements.endpoints.MediaSinkType
+import io.github.thibaultbee.streampack.core.elements.endpoints.composites.data.Packet
+import io.github.thibaultbee.streampack.core.elements.endpoints.composites.data.SrtPacket
+import io.github.thibaultbee.streampack.core.elements.endpoints.composites.sinks.AbstractSink
+import io.github.thibaultbee.streampack.core.elements.endpoints.composites.sinks.SinkConfiguration
+import io.github.thibaultbee.streampack.core.logger.Logger
+import io.github.thibaultbee.streampack.ext.srt.configuration.mediadescriptor.SrtMediaDescriptor
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.IOException
+
+class SrtSink(private val coroutineDispatcher: CoroutineDispatcher) : AbstractSink() {
+    override val supportedSinkTypes: List<MediaSinkType> = listOf(MediaSinkType.SRT)
+
+    private var socket: CoroutineSrtSocket? = null
+    private var completionException: Throwable? = null
+    private var isOnError: Boolean = false
+
+    private var bitrate = 0L
+
+    /**
+     * Get SRT stats
+     */
+    override val metrics: Stats
+        get() = socket?.bistats(clear = true, instantaneous = true)
+            ?: throw IllegalStateException("Socket is not initialized")
+
+    private val _isOpenFlow = MutableStateFlow(false)
+    override val isOpenFlow = _isOpenFlow.asStateFlow()
+
+    override fun configure(config: SinkConfiguration) {
+        bitrate = config.streamConfigs.sumOf { it.startBitrate.toLong() }
+    }
+
+    override suspend fun openImpl(mediaDescriptor: MediaDescriptor) =
+        open(SrtMediaDescriptor(mediaDescriptor))
+
+    private suspend fun open(mediaDescriptor: SrtMediaDescriptor) {
+        if (mediaDescriptor.srtUrl.mode != null) {
+            require(mediaDescriptor.srtUrl.mode == Mode.CALLER) { "Invalid mode: ${mediaDescriptor.srtUrl.mode}. Only caller supported." }
+        }
+        if (mediaDescriptor.srtUrl.payloadSize != null) {
+            require(mediaDescriptor.srtUrl.payloadSize == PAYLOAD_SIZE)
+        }
+        if (mediaDescriptor.srtUrl.transtype != null) {
+            require(mediaDescriptor.srtUrl.transtype == Transtype.LIVE)
+        }
+
+        socket = CoroutineSrtSocket(coroutineDispatcher)
+        socket?.let {
+            // Forces this value. Only works if they are null in [srtUrl]
+            it.setSockFlag(SockOpt.PAYLOADSIZE, PAYLOAD_SIZE)
+            it.setSockFlag(SockOpt.TRANSTYPE, Transtype.LIVE)
+            completionException = null
+            isOnError = false
+            it.socketContext.invokeOnCompletion { t ->
+                completionException = t
+                _isOpenFlow.tryEmit(false)
+            }
+            
+            // Connect with timeout to prevent hanging indefinitely
+            val connected = withTimeoutOrNull(5000L) {
+                it.connect(mediaDescriptor.srtUrl)
+                true
+            }
+            
+            if (connected == null) {
+                it.close()
+                socket = null
+                throw IOException("SRT connection timeout after 5 seconds")
+            }
+            
+            // Give the server a moment to reject the connection if stream ID is wrong
+            // Some servers accept the connection but immediately close it for invalid stream IDs
+            kotlinx.coroutines.delay(100)
+            
+            // Check if socket is still connected after brief delay
+            // If server rejected stream ID, socket will be disconnected by now
+            if (!it.isConnected) {
+                socket = null
+                throw IOException("SRT connection rejected by server (possibly invalid stream ID or credentials)")
+            }
+        }
+        _isOpenFlow.emit(true)
+    }
+
+    private fun buildMsgCtrl(packet: Packet): MsgCtrl {
+        val boundary = if (packet is SrtPacket) {
+            when {
+                packet.isFirstPacketFrame && packet.isLastPacketFrame -> Boundary.SOLO
+                packet.isFirstPacketFrame -> Boundary.FIRST
+                packet.isLastPacketFrame -> Boundary.LAST
+                else -> Boundary.SUBSEQUENT
+            }
+        } else {
+            null
+        }
+        return if (packet.ts == 0L) {
+            if (boundary != null) {
+                MsgCtrl(boundary = boundary)
+            } else {
+                MsgCtrl()
+            }
+        } else {
+            if (boundary != null) {
+                MsgCtrl(srcTime = packet.ts, boundary = boundary)
+            } else {
+                MsgCtrl(srcTime = packet.ts)
+            }
+        }
+    }
+
+    override suspend fun write(packet: Packet): Int {
+        if (isOnError) {
+            return -1
+
+        }
+
+        // Pick up completionException if any
+        completionException?.let {
+            isOnError = true
+            throw ClosedException(it)
+        }
+
+        val socket = requireNotNull(socket) { "SrtEndpoint is not initialized" }
+        if ((packet.ts != 0L) && (socket.connectionTime > packet.ts)) {
+            Logger.w(
+                TAG,
+                "Packet ts (${packet.ts} ms) is lower than connection time (${socket.connectionTime} ms). Dropping packet."
+            )
+            return -1
+        }
+
+        try {
+            return socket.send(packet.buffer, buildMsgCtrl(packet))
+        } catch (t: Throwable) {
+            isOnError = true
+            if (completionException != null) {
+                // Socket already closed
+                throw ClosedException(completionException!!)
+            }
+            close()
+            throw ClosedException(t)
+        }
+    }
+
+    override suspend fun startStream() {
+        val socket = requireNotNull(socket) { "SrtEndpoint is not initialized" }
+        
+        // Check if socket is still connected - it may have disconnected between open() and startStream()
+        // This can happen with half-alive servers or late rejection of invalid stream ID
+        if (!socket.isConnected) {
+            Logger.w(TAG, "SRT socket disconnected between open() and startStream()")
+            throw IOException("SRT connection lost before stream could start")
+        }
+
+        socket.setSockFlag(SockOpt.MAXBW, 0L)
+        socket.setSockFlag(SockOpt.INPUTBW, bitrate)
+    }
+
+    override suspend fun stopStream() {
+    }
+
+    override suspend fun close() {
+        // Close with timeout to prevent hanging if server is in a weird half-alive state
+        // SRT goodbye handshake can hang indefinitely if server is not responding properly
+        val closed = withTimeoutOrNull(2000L) {
+            socket?.close()
+            true
+        }
+        
+        if (closed == null) {
+            Logger.w(TAG, "SRT socket close timeout after 2 seconds - forcing close")
+            // Force socket to null even if close timed out
+            socket = null
+        }
+        
+        _isOpenFlow.emit(false)
+    }
+
+    companion object {
+        private const val TAG = "SrtSink"
+
+        private const val PAYLOAD_SIZE = 1316
+    }
+}

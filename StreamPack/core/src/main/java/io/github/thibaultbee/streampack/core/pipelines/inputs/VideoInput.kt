@@ -1,0 +1,730 @@
+/*
+ * Copyright (C) 2025 Thibault B.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package io.github.thibaultbee.streampack.core.pipelines.inputs
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.view.Surface
+import androidx.annotation.IntRange
+import io.github.thibaultbee.streampack.core.elements.processing.video.ISurfaceProcessorInternal
+import io.github.thibaultbee.streampack.core.elements.processing.video.outputs.ISurfaceOutput
+import io.github.thibaultbee.streampack.core.elements.processing.video.outputs.SurfaceOutput
+import io.github.thibaultbee.streampack.core.elements.processing.video.source.ISourceInfoProvider
+import io.github.thibaultbee.streampack.core.elements.sources.video.IPreviewableSource
+import io.github.thibaultbee.streampack.core.elements.sources.video.ISurfaceSourceInternal
+import io.github.thibaultbee.streampack.core.elements.sources.video.IVideoSource
+import io.github.thibaultbee.streampack.core.elements.sources.video.IVideoSourceInternal
+import io.github.thibaultbee.streampack.core.elements.sources.video.VideoSourceConfig
+import io.github.thibaultbee.streampack.core.elements.sources.video.camera.CameraSource
+import io.github.thibaultbee.streampack.core.elements.sources.video.camera.CameraSourceFactory
+import io.github.thibaultbee.streampack.core.elements.utils.ConflatedJob
+import io.github.thibaultbee.streampack.core.elements.utils.av.video.DynamicRangeProfile
+import io.github.thibaultbee.streampack.core.logger.Logger
+import io.github.thibaultbee.streampack.core.pipelines.IVideoDispatcherProvider
+import io.github.thibaultbee.streampack.core.pipelines.outputs.SurfaceDescriptor
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+
+/**
+ * The public interface for the video input.
+ * It provides access to the video source, the video processor, and the streaming state.
+ */
+interface IVideoInput {
+
+    /**
+     * Whether the video input is streaming.
+     */
+    val isStreamingFlow: StateFlow<Boolean>
+
+    /**
+     * The video source
+     */
+    val sourceFlow: StateFlow<IVideoSource?>
+
+    /**
+     * Sets the video source.
+     *
+     * The previous video source will be released unless its preview is still running.
+     */
+    suspend fun setSource(videoSourceFactory: IVideoSourceInternal.Factory)
+
+    /**
+     * Whether the video input has a configuration.
+     * It is true if the video source has been configured.
+     */
+    val withConfig: Boolean
+
+    /**
+     * The video processor for adding effects to the video frames.
+     */
+    val processor: ISurfaceProcessorInternal
+
+    /**
+     * Takes a snapshot of the current video frame.
+     *
+     * The snapshot is returned as a [Bitmap].
+     *
+     * @param rotationDegrees The rotation to apply to the snapshot, in degrees. 0 means no rotation.
+     * @return The snapshot as a [Bitmap].
+     */
+    suspend fun takeSnapshot(@IntRange(from = 0, to = 359) rotationDegrees: Int = 0): Bitmap
+}
+
+/**
+ * Takes a JPEG snapshot of the current video frame.
+ *
+ * The snapshot is saved to the specified file.
+ *
+ * @param filePathString The path of the file to save the snapshot to.
+ * @param quality The quality of the JPEG, from 0 to 100.
+ * @param rotationDegrees The rotation to apply to the snapshot, in degrees.
+ */
+suspend fun IVideoInput.takeJpegSnapshot(
+    filePathString: String,
+    @IntRange(from = 0, to = 100) quality: Int = 100,
+    @IntRange(from = 0, to = 359) rotationDegrees: Int = 0
+) = takeJpegSnapshot(FileOutputStream(filePathString), quality, rotationDegrees)
+
+
+/**
+ * Takes a JPEG snapshot of the current video frame.
+ *
+ * The snapshot is saved to the specified file.
+ *
+ * @param file The file to save the snapshot to.
+ * @param quality The quality of the JPEG, from 0 to 100.
+ * @param rotationDegrees The rotation to apply to the snapshot, in degrees.
+ */
+suspend fun IVideoInput.takeJpegSnapshot(
+    file: File,
+    @IntRange(from = 0, to = 100) quality: Int = 100,
+    @IntRange(from = 0, to = 359) rotationDegrees: Int = 0
+) = takeJpegSnapshot(FileOutputStream(file), quality, rotationDegrees)
+
+/**
+ * Takes a snapshot of the current video frame.
+ *
+ * The snapshot is saved as a JPEG to the specified output stream.
+ * @param outputStream The output stream to save the snapshot to.
+ * @param quality The quality of the JPEG, from 0 to 100.
+ * @param rotationDegrees The rotation to apply to the snapshot, in degrees.
+ */
+suspend fun IVideoInput.takeJpegSnapshot(
+    outputStream: OutputStream,
+    @IntRange(from = 0, to = 100) quality: Int = 100,
+    @IntRange(from = 0, to = 359) rotationDegrees: Int = 0
+) {
+    val bitmap = takeSnapshot(rotationDegrees)
+    bitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+}
+
+/**
+ * Whether the pipeline has a video source.
+ */
+val IVideoInput.withSource: Boolean
+    get() = sourceFlow.value != null
+
+/**
+ * A internal class that manages a video source and a video processor.
+ */
+internal class VideoInput(
+    private val context: Context,
+    private val surfaceProcessorFactory: ISurfaceProcessorInternal.Factory,
+    private val dispatcherProvider: IVideoDispatcherProvider,
+    dynamicRangeProfileHint: DynamicRangeProfile = DynamicRangeProfile.sdr,
+    private val onUpdateOutputSurface: suspend () -> List<Triple<SurfaceDescriptor, Boolean, () -> Boolean>>
+) : IVideoInput {
+    private val coroutineScope = CoroutineScope(dispatcherProvider.default)
+    private var isStreamingJob = ConflatedJob()
+    private var infoProviderJob = ConflatedJob()
+
+    private var isReleaseRequested = AtomicBoolean(false)
+
+    private val sourceMutex = Mutex()
+
+    override var processor: ISurfaceProcessorInternal =
+        surfaceProcessorFactory.create(dynamicRangeProfileHint, dispatcherProvider)
+        private set
+
+    // SOURCE
+    private val sourceInternalFlow = MutableStateFlow<IVideoSourceInternal?>(null)
+
+    /**
+     * The video source.
+     * It allows advanced video settings.
+     */
+    override val sourceFlow: StateFlow<IVideoSource?> = sourceInternalFlow.asStateFlow()
+
+    private val source: IVideoSourceInternal?
+        get() = sourceInternalFlow.value
+
+    // CONFIG
+    private val _sourceConfigFlow = MutableStateFlow<VideoSourceConfig?>(null)
+
+    /**
+     * The video source configuration.
+     */
+    val sourceConfigFlow = _sourceConfigFlow.asStateFlow()
+
+    private val sourceConfig: VideoSourceConfig?
+        get() = sourceConfigFlow.value
+
+    override val withConfig: Boolean
+        get() = sourceConfig != null
+
+    // STATE
+    /**
+     * Whether the video input is streaming.
+     */
+    private val _isStreamingFlow = MutableStateFlow(false)
+    override val isStreamingFlow = _isStreamingFlow.asStateFlow()
+
+    override suspend fun setSource(videoSourceFactory: IVideoSourceInternal.Factory) {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+
+        withContext(dispatcherProvider.default) {
+            sourceMutex.withLock {
+                val previousVideoSource = sourceInternalFlow.value
+                val isStreaming = previousVideoSource?.isStreamingFlow?.value ?: false
+
+                if (videoSourceFactory.isSourceEquals(previousVideoSource)) {
+                    Logger.i(TAG, "Video source is already set, skipping")
+                    return@withContext
+                }
+
+                if ((previousVideoSource is CameraSource) && (videoSourceFactory is CameraSourceFactory)) {
+                    if (previousVideoSource.cameraId == videoSourceFactory.cameraId) {
+                        Logger.i(
+                            TAG,
+                            "Camera id ${previousVideoSource.cameraId} is already set, skipping"
+                        )
+                        return@withContext
+                    }
+
+                    /**
+                     * It is not possible to have 2 camera sources at the same time because of
+                     * camera2 API. If the new video source is a camera source and the current one
+                     * is a camera source, we release the current one ASAP.
+                     */
+                    previousVideoSource.stopStream()
+                    previousVideoSource.release()
+                }
+
+                // Prepare new video source
+                val newVideoSource = videoSourceFactory.create(context, dispatcherProvider)
+
+                sourceConfig?.let {
+                    newVideoSource.configure(it)
+                    addSourceSurface(
+                        it,
+                        processor,
+                        newVideoSource
+                    )
+                } ?: Logger.w(
+                    TAG, "Video source configuration is not set"
+                )
+
+                infoProviderJob += coroutineScope.launch {
+                    /**
+                     * First emission is the current value, we skip it.
+                     */
+                    newVideoSource.infoProviderFlow.drop(1).collect { infoProvider ->
+                        try {
+                            updateOutputSurfaces(infoProvider)
+                        } catch (t: Throwable) {
+                            Logger.w(
+                                TAG,
+                                "setVideoSource: Can't update output surfaces after info provider changed: ${t.message}"
+                            )
+                        }
+                    }
+                }
+
+                // Start new video source
+                if (isStreaming) {
+                    Logger.e(TAG, "Starting new video source streaming")
+                    try {
+                        previousVideoSource.stopStream()
+                    } catch (t: Throwable) {
+                        Logger.w(
+                            TAG,
+                            "setVideoSource: Can't stop previous video source: ${t.message}"
+                        )
+                    }
+
+                    updateOutputSurfacesUnsafe(newVideoSource.infoProviderFlow.value)
+
+                    try {
+                        newVideoSource.startStream()
+                    } catch (t: Throwable) {
+                        Logger.w(
+                            TAG,
+                            "setVideoSource: Can't start new video source: ${t.message}."
+                        )
+                        throw t
+                    }
+                } else {
+                    updateOutputSurfacesUnsafe(newVideoSource.infoProviderFlow.value)
+                }
+
+                isStreamingJob += coroutineScope.launch {
+                    newVideoSource.isStreamingFlow.collect { isStreaming ->
+                        if ((!isStreaming) && isStreamingFlow.value) {
+                            Logger.i(TAG, "Video source has been stopped.")
+                            stopStream()
+                        }
+                    }
+                }
+
+                // Gets and resets output surface from previous video source.
+                if (previousVideoSource is ISurfaceSourceInternal) {
+                    try {
+                        val surface = previousVideoSource.getOutput()
+                        previousVideoSource.resetOutput()
+                        surface?.let { processor.removeInputSurface(surface) }
+                    } catch (t: Throwable) {
+                        Logger.w(
+                            TAG,
+                            "setVideoSource: Can't reset previous video source output surface: ${t.message}"
+                        )
+                    }
+                }
+
+                val isPreviewing =
+                    (previousVideoSource as? IPreviewableSource)?.isPreviewingFlow?.value
+                        ?: false
+                /**
+                 * Release previous video source only if it's not previewing.
+                 * If it's previewing, it will be released when preview is stopped.
+                 */
+                if (!isPreviewing) {
+                    try {
+                        previousVideoSource?.release()
+                    } catch (t: Throwable) {
+                        Logger.w(
+                            TAG,
+                            "setVideoSource: Can't release previous video source: ${t.message}"
+                        )
+                    }
+                }
+
+                // Replace video source
+                sourceInternalFlow.emit(newVideoSource)
+            }
+        }
+    }
+
+
+    suspend fun setSourceConfig(newVideoSourceConfig: VideoSourceConfig) {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+
+        withContext(dispatcherProvider.default) {
+            sourceMutex.withLock {
+                if (sourceConfig == newVideoSourceConfig) {
+                    Logger.i(
+                        TAG,
+                        "Video source configuration is the same, skipping configuration"
+                    )
+                    return@withContext
+                }
+                require(!isStreamingFlow.value) { "Can't change video source configuration while streaming" }
+
+                try {
+                    applySourceConfig(
+                        sourceConfig,
+                        newVideoSourceConfig
+                    )
+                    _sourceConfigFlow.emit(newVideoSourceConfig)
+                } catch (t: Throwable) {
+                    _sourceConfigFlow.emit(null)
+                    throw t
+                }
+            }
+        }
+    }
+
+    private suspend fun applySourceConfig(
+        previousVideoConfig: VideoSourceConfig?, videoConfig: VideoSourceConfig
+    ) {
+        val videoSourceInternal = sourceInternalFlow.value
+        videoSourceInternal?.configure(videoConfig)
+
+        val outputSurface =
+            if (videoSourceInternal is ISurfaceSourceInternal) videoSourceInternal.getOutput() else null
+        val currentSurfaceProcessor = processor
+        if (previousVideoConfig?.dynamicRangeProfile != videoConfig.dynamicRangeProfile) {
+            releaseSurfaceProcessor()
+            processor = buildSurfaceProcessor(videoConfig)
+        } else if (previousVideoConfig.resolution != videoConfig.resolution) {
+            outputSurface?.let {
+                if (videoSourceInternal is ISurfaceSourceInternal) {
+                    videoSourceInternal.resetOutput()
+                }
+                currentSurfaceProcessor.removeInputSurface(it)
+                updateOutputSurfacesUnsafe(videoSourceConfig = videoConfig)
+                addSourceSurface(
+                    videoConfig,
+                    currentSurfaceProcessor,
+                    videoSourceInternal
+                )
+            }
+        }
+    }
+
+    private suspend fun addSourceSurface(
+        videoSourceConfig: VideoSourceConfig,
+        surfaceProcessor: ISurfaceProcessorInternal,
+        videoSource: IVideoSourceInternal? = sourceInternalFlow.value,
+    ) {
+        // Adds surface processor input
+        if (videoSource is ISurfaceSourceInternal) {
+            videoSource.setOutput(
+                surfaceProcessor.createInputSurface(
+                    videoSource.infoProviderFlow.value.getSurfaceSize(
+                        videoSourceConfig.resolution
+                    ), videoSource.timebase
+                )
+            )
+        } else {
+            Logger.w(TAG, "Video source is not a surface source")
+        }
+    }
+
+    private suspend fun buildSurfaceProcessor(videoSourceConfig: VideoSourceConfig): ISurfaceProcessorInternal {
+        val newSurfaceProcessor =
+            surfaceProcessorFactory.create(
+                videoSourceConfig.dynamicRangeProfile,
+                dispatcherProvider
+            )
+        // Re-adds source surface
+        addSourceSurface(videoSourceConfig, newSurfaceProcessor)
+
+        // Re-adds output surfaces
+        addOutputSurfacesUnsafe(videoSourceConfig = videoSourceConfig)
+
+        return newSurfaceProcessor
+    }
+
+    override suspend fun takeSnapshot(
+        @IntRange(
+            from = 0,
+            to = 359
+        ) rotationDegrees: Int
+    ): Bitmap {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+        return startStreamForBlock {
+            suspendCoroutine { continuation ->
+                val listener = processor.snapshot(rotationDegrees)
+                try {
+                    val bitmap = listener.get()
+                    continuation.resume(bitmap)
+                } catch (e: Exception) {
+                    continuation.resumeWith(Result.failure(e))
+                }
+            }
+        }
+    }
+
+    /**
+     * Creates a surface output for the given surface.
+     *
+     * Use it for additional processing.
+     *
+     * @param infoProvider the source info provider
+     * @param videoSourceConfig the source configuration
+     * @param surfaceDescriptor the encoder surface
+     * @param isMirroringRequired whether mirroring is required
+     * @param isStreaming a lambda to check if the surface is streaming
+     */
+    private fun buildSurfaceOutput(
+        infoProvider: ISourceInfoProvider,
+        videoSourceConfig: VideoSourceConfig,
+        surfaceDescriptor: SurfaceDescriptor,
+        isMirroringRequired: Boolean,
+        isStreaming: () -> Boolean
+    ): ISurfaceOutput {
+        val infoProvider = infoProvider
+        val sourceResolution = infoProvider.getSurfaceSize(
+            videoSourceConfig.resolution // build surface output is only called after config is set
+        )
+        return SurfaceOutput(
+            surfaceDescriptor,
+            isStreaming,
+            sourceResolution,
+            isMirroringRequired,
+            infoProvider
+        )
+    }
+
+    internal suspend fun addOutputSurface(
+        surfaceDescriptor: SurfaceDescriptor,
+        isMirroringRequired: Boolean,
+        isStreaming: () -> Boolean
+    ) {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+
+        sourceMutex.withLock {
+            val sourceConfig = sourceConfig
+            val infoProvider = source?.infoProviderFlow?.value
+            if ((sourceConfig == null) || (infoProvider == null)) {
+                Logger.w(
+                    TAG,
+                    "Video source configuration or info provider is not set, can't add output surface"
+                )
+                return
+            }
+            addOutputSurfaceUnsafe(
+                buildSurfaceOutput(
+                    infoProvider,
+                    sourceConfig,
+                    surfaceDescriptor = surfaceDescriptor,
+                    isMirroringRequired = isMirroringRequired,
+                    isStreaming = isStreaming
+                )
+            )
+        }
+    }
+
+    internal fun addOutputSurfaceUnsafe(output: ISurfaceOutput) {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+
+        processor.addOutputSurface(output)
+    }
+
+    private suspend fun addOutputSurfacesUnsafe(
+        infoProvider: ISourceInfoProvider? = source?.infoProviderFlow?.value,
+        videoSourceConfig: VideoSourceConfig? = sourceConfig
+    ) {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+
+        if ((videoSourceConfig == null) || (infoProvider == null)) {
+            Logger.w(
+                TAG,
+                "Video source configuration or info provider is not set, can't add output surface"
+            )
+            return
+        }
+
+        val surfaces = onUpdateOutputSurface()
+        surfaces.forEach { (surfaceDescriptor, isMirroringRequired, isStreaming) ->
+            addOutputSurfaceUnsafe(
+                buildSurfaceOutput(
+                    infoProvider,
+                    videoSourceConfig,
+                    surfaceDescriptor,
+                    isMirroringRequired,
+                    isStreaming
+                )
+            )
+        }
+    }
+
+    private suspend fun updateOutputSurfacesUnsafe(
+        infoProvider: ISourceInfoProvider? = source?.infoProviderFlow?.value,
+        videoSourceConfig: VideoSourceConfig? = sourceConfig
+    ) {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+
+        processor.removeAllOutputSurfaces()
+        addOutputSurfacesUnsafe(infoProvider, videoSourceConfig)
+    }
+
+    private suspend fun updateOutputSurfaces(
+        infoProvider: ISourceInfoProvider? = source?.infoProviderFlow?.value,
+        videoSourceConfig: VideoSourceConfig? = sourceConfig
+    ) {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+
+        sourceMutex.withLock {
+            updateOutputSurfacesUnsafe(infoProvider, videoSourceConfig)
+        }
+    }
+
+    internal fun removeOutputSurface(output: Surface) {
+        processor.removeOutputSurface(output)
+    }
+
+    private suspend fun startStreamUnsafe() {
+        val source =
+            requireNotNull(source) { "Video source must be set before starting stream" }
+        if (isStreamingFlow.value) {
+            Logger.w(TAG, "Stream is already running")
+            return
+        }
+        if (!withConfig) {
+            Logger.w(TAG, "Video source config is not set")
+        }
+        source.startStream()
+    }
+
+    /**
+     * Starts the stream, executes the given block, then stops the stream.
+     *
+     * If the stream was already running, it will not be stopped after the block.
+     */
+    private suspend fun <T> startStreamForBlock(block: suspend () -> T): T {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+        return withContext(dispatcherProvider.default) {
+            sourceMutex.withLock {
+                val wasStreaming = isStreamingFlow.value
+                if (!wasStreaming) {
+                    startStreamUnsafe()
+                }
+                try {
+                    block()
+                } finally {
+                    if (!wasStreaming) {
+                        stopStreamUnsafe()
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun startStream() {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+        withContext(dispatcherProvider.default) {
+            sourceMutex.withLock {
+                startStreamUnsafe()
+                _isStreamingFlow.emit(true)
+            }
+        }
+    }
+
+    private suspend fun stopStreamUnsafe() {
+        try {
+            val videoSource = sourceInternalFlow.value
+            videoSource?.stopStream()
+            if (videoSource is ISurfaceSourceInternal) {
+                videoSource.getOutput()?.let {
+                    /**
+                     * Reset timebase to video source timebase to avoid timebase mismatch when
+                     * the device is locked.
+                     * This will reset the internally the [io.github.thibaultbee.streampack.core.elements.utils.time.VideoTimebaseConverter]
+                     */
+                    processor.setTimebase(it, videoSource.timebase)
+                } ?: Logger.w(TAG, "stopStream: Video source output surface is null")
+            }
+        } catch (t: Throwable) {
+            Logger.w(TAG, "stopStream: Can't stop video source: ${t.message}")
+        }
+    }
+
+    suspend fun stopStream() {
+        if (isReleaseRequested.get()) {
+            throw IllegalStateException("Input is released")
+        }
+        withContext(dispatcherProvider.default) {
+            sourceMutex.withLock {
+                _isStreamingFlow.emit(false)
+                stopStreamUnsafe()
+            }
+        }
+    }
+
+    private suspend fun releaseSurfaceProcessor() {
+        val videoSource = sourceInternalFlow.value
+        if (videoSource is ISurfaceSourceInternal) {
+            videoSource.getOutput()?.let {
+                processor.removeInputSurface(it)
+            }
+        }
+        processor.removeAllOutputSurfaces()
+        processor.release()
+    }
+
+    suspend fun release() {
+        if (isReleaseRequested.getAndSet(true)) {
+            Logger.w(TAG, "Already released")
+            return
+        }
+
+        withContext(dispatcherProvider.default) {
+            sourceMutex.withLock {
+                _isStreamingFlow.emit(false)
+                try {
+                    releaseSurfaceProcessor()
+                } catch (t: Throwable) {
+                    Logger.w(
+                        TAG,
+                        "release: Can't release surface processor: ${t.message}"
+                    )
+                }
+                val videoSource = sourceInternalFlow.value
+                if (videoSource is ISurfaceSourceInternal) {
+                    try {
+                        videoSource.resetOutput()
+                    } catch (t: Throwable) {
+                        Logger.w(
+                            TAG,
+                            "release: Can't release video source output surface: ${t.message}"
+                        )
+                    }
+                }
+                try {
+                    videoSource?.release()
+                } catch (t: Throwable) {
+                    Logger.w(
+                        TAG,
+                        "release: Can't release video source: ${t.message}"
+                    )
+                }
+
+                isStreamingJob.cancel()
+                infoProviderJob.cancel()
+            }
+            coroutineScope.coroutineContext.cancelChildren()
+        }
+    }
+
+    companion object {
+        private const val TAG = "VideoInput"
+    }
+}
